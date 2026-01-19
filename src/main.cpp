@@ -11,9 +11,9 @@
 Adafruit_SSD1351 display(128, 128, &SPI, OLED_CS, OLED_DC, OLED_RST);
 
 // ----------------- Rotary encoder pins -----------------
-#define ENC_A   5    // (verhuis later naar 2 als je DMX op D3 wil gebruiken)
+#define ENC_A   5    // (kan later naar 2 als je DMX op D3 wil gebruiken)
 #define ENC_B   4
-#define ENC_SW  2
+#define ENC_SW  2    // drukknop (actief LOW, met INPUT_PULLUP)
 
 // ----------------- Kleuren (RGB565) -----------------
 #define BLACK   0x0000
@@ -22,52 +22,30 @@ Adafruit_SSD1351 display(128, 128, &SPI, OLED_CS, OLED_DC, OLED_RST);
 #define RED     0xF800
 #define BLUE    0x001F
 
-
-
 // ----------------- UI-state -----------------
-enum UiState { HOME, PAGE_RED, PAGE_BLUE };
-UiState ui = HOME;
-int8_t selectedIndex = 0;   // 0 = regel 1, 1 = regel 2
+enum UiMode  { MODE_SELECT, MODE_EDIT };
+UiMode mode = MODE_SELECT;
+
+int8_t selectedIndex = 0;   // 0 = Channel, 1 = Timer, 2=duration
 bool needRedraw = true;
 
 // Encoder intern
-int lastA = HIGH;           // voor edge-detectie op A (met pullup is idle HIGH)
+int lastA = HIGH;           // edge-detectie op A (met pullup is idle HIGH)
 unsigned long lastButtonMs = 0;
 const unsigned long debounceMs = 180;
 
+// ----------------- Instelbare waarden -----------------
+uint8_t channel = 1;    // 1..255 (wrap)
+uint8_t minutes = 10;   // 0..59
+uint8_t seconds = 0;    // 0..59
+uint8_t seconds_dur=0;
+
+// Bij TIMER-bewerken: 0 = minutes, 1 = seconds
+uint8_t timerEditField = 0;
 
 
-
-
-void drawClockCentered(
-  int minutes,
-  int seconds,
-  uint16_t bgColor,
-  uint16_t textColor
-) {
-  char timeBuf[6];
-  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", minutes, seconds);
-
-  // Achtergrond
-  display.fillScreen(bgColor);
-
-  // Tekst
-  display.setTextSize(3);
-  display.setTextColor(textColor);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  display.getTextBounds(timeBuf, 0, 0, &x1, &y1, &w, &h);
-
-  display.setCursor((128 - w) / 2, (128 - h) / 2);
-  display.print(timeBuf);
-}
-
-// ----------------- JOUW LOGO (MONO 1-bit, PROGMEM) -----------------
-//  Let op: dit is 1-bit bitmap data (geen kleur), ideaal voor drawBitmap-achtig tekenen.
-//  We gebruiken een eigen tekenfunctie met expliciete stride, zodat de export (8 bytes/rij) correct werkt.
-//
-//  'TRBL-Logo-Zwart-transparant-Zoomed16x9', 50x30px  (de tool heeft 8 bytes/rij -> 240 bytes totaal)
+// ----------------- LOGO (1-bit bitmap, PROGMEM) -----------------
+// 'TRBL-Logo-Zwart-transparant-Zoomed16x9', 50x30px; tool exporteert 8 bytes/rij -> 240 bytes
 const unsigned char epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9 [] PROGMEM = {
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 
   0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 
@@ -126,6 +104,8 @@ void drawMonoBitmap_P_stride(
   }
 }
 
+
+
 void drawTextLeft(const char* txt, int16_t x, int16_t y, uint8_t size, uint16_t color) {
   display.setTextSize(size);
   display.setTextColor(color);
@@ -133,30 +113,97 @@ void drawTextLeft(const char* txt, int16_t x, int16_t y, uint8_t size, uint16_t 
   display.print(txt);
 }
 
+void formatTime(char* out, size_t outLen, uint8_t mm, uint8_t ss) {
+  snprintf(out, outLen, "%02u:%02u", mm, ss);
+}
+
+// ----------------- Home scherm (select + inline edit) -----------------
+
 void drawHome() {
   display.fillScreen(WHITE);
 
   const int16_t MARGIN_X = 5;
-  const int16_t TITLE_Y  = 10;
-  const int16_t LINE_H   = 22;
-  const int16_t ITEM1_Y  = TITLE_Y + 22 + 8;
+  const int16_t TITLE_Y  = 8;
+  const int16_t LINE_H   = 18;              // kleiner: minder verticale ruimte
+  const int16_t HILIGHT_H = 14;             // highlight iets compacter
+  const int16_t ITEM1_Y  = TITLE_Y + 18 + 6; // "Menu" + kleinere marge
   const int16_t ITEM2_Y  = ITEM1_Y + LINE_H;
+  const int16_t ITEM3_Y  = ITEM2_Y + LINE_H;
 
   drawTextLeft("Menu", MARGIN_X, TITLE_Y, 2, BLACK);
 
-  // Highlight vlak
+  // --- Grijze highlightbalk voor geselecteerde rij (nu 3 cases) ---
   if (selectedIndex == 0) {
-    display.fillRect(MARGIN_X, ITEM1_Y - 2, 118, 18, GREY);
-  } else {
-    display.fillRect(MARGIN_X, ITEM2_Y - 2, 118, 18, GREY);
+    display.fillRect(MARGIN_X, ITEM1_Y - 2, 118, HILIGHT_H, GREY);
+  } else if (selectedIndex == 1) {
+    display.fillRect(MARGIN_X, ITEM2_Y - 2, 118, HILIGHT_H, GREY);
+  } else { // selectedIndex == 2
+    display.fillRect(MARGIN_X, ITEM3_Y - 2, 118, HILIGHT_H, GREY);
   }
 
-  drawTextLeft("1. Channel instellen", MARGIN_X + 2, ITEM1_Y, 1, BLACK);
-  drawTextLeft("2. Timer instellen",   MARGIN_X + 2, ITEM2_Y, 1, BLACK);
+  // Labels
+  drawTextLeft("Channel:",  MARGIN_X + 2, ITEM1_Y, 1, BLACK);
+  drawTextLeft("Timer:",    MARGIN_X + 2, ITEM2_Y, 1, BLACK);
+  drawTextLeft("Duration:", MARGIN_X + 2, ITEM3_Y, 1, BLACK);
+
+  // Waarde-posities
+  const int16_t VAL_X = MARGIN_X + 68;  // iets dichter
+
+  // Channel-waarde
+  char chBuf[8];
+  snprintf(chBuf, sizeof(chBuf), "%u", channel);
+  drawTextLeft(chBuf, VAL_X, ITEM1_Y, 1, BLACK);
+
+  // Timer-waarde (MM:SS)
+  char timeBuf[6];
+  formatTime(timeBuf, sizeof(timeBuf), minutes, seconds);
+  drawTextLeft(timeBuf, VAL_X, ITEM2_Y, 1, BLACK);
+
+  // Duration-waarde (alleen seconden)
+  char durBuf[8];
+  snprintf(durBuf, sizeof(durBuf), "%u", seconds_dur);
+  drawTextLeft(durBuf, VAL_X, ITEM3_Y, 1, BLACK);
+
+  // --- Blauwe kader rond de waarde die je aan het bewerken bent ---
+  if (mode == MODE_EDIT) {
+    display.setTextSize(1);
+
+    if (selectedIndex == 0) {
+      // Channel -> kader om getal
+      int16_t x1, y1; uint16_t w, h;
+      display.getTextBounds(chBuf, 0, 0, &x1, &y1, &w, &h);
+      display.drawRect(VAL_X - 2, ITEM1_Y - 2, w + 4, h + 4, BLUE);
+    }
+    else if (selectedIndex == 1) {
+      // Timer -> kader om MM of SS
+      int16_t xMM1, yMM1; uint16_t wMM, hMM;
+      display.getTextBounds("00", 0, 0, &xMM1, &yMM1, &wMM, &hMM);
+      int16_t xMMcol1, yMMcol1; uint16_t wMMcol, hMMcol;
+      display.getTextBounds("00:", 0, 0, &xMMcol1, &yMMcol1, &wMMcol, &hMMcol);
+
+      int16_t mmX  = VAL_X;
+      int16_t ssX  = VAL_X + wMMcol;
+      int16_t boxY = ITEM2_Y - 2;
+      uint16_t boxH = hMM + 4;
+      uint16_t boxW = wMM + 4;
+
+      if (timerEditField == 0) {
+        display.drawRect(mmX - 2, boxY, boxW, boxH, BLUE);
+      } else {
+        display.drawRect(ssX - 2, boxY, boxW, boxH, BLUE);
+      }
+    }
+    else if (selectedIndex == 2) {
+      // Duration -> kader om secondenwaarde
+      int16_t x1, y1; uint16_t w, h;
+      display.getTextBounds(durBuf, 0, 0, &x1, &y1, &w, &h);
+      display.drawRect(VAL_X - 2, ITEM3_Y - 2, w + 4, h + 4, BLUE);
+    }
+  }
 
   // Logo onderaan gecentreerd
   int16_t logoX = (128 - LOGO_W) / 2;
-  int16_t logoY = 128 - LOGO_H - 8;
+  int16_t logoY = 128 - LOGO_H - 6;   // iets dichter tegen onderrand
   drawMonoBitmap_P_stride(
     logoX, logoY, LOGO_W, LOGO_H,
     epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9,
@@ -166,24 +213,6 @@ void drawHome() {
   );
 }
 
-void drawFullColor(uint16_t color, const char* label) {
-  display.fillScreen(color);
-
-  // label centreren
-  display.setTextSize(2);
-  display.setTextColor(WHITE);
-  int16_t x1, y1; uint16_t w, h;
-  display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor((128 - w) / 2, (128 - h) / 2);
-  display.print(label);
-
-  // hint
-  display.setTextSize(1);
-  const char* back = "Druk om terug te keren";
-  display.getTextBounds(back, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor((128 - w) / 2, (128 - h) / 2 + 20);
-  display.print(back);
-}
 
 // ---------- Encoder & Button ----------
 
@@ -195,21 +224,15 @@ int8_t readEncoderStep() {
   // detecteer opgaande flank van A
   if (lastA == LOW && a == HIGH) {
     int b = digitalRead(ENC_B);
-    // Met INPUT_PULLUP: LOW betekent naar GND getrokken.
-    // B laag -> tegen de klok in (links), B hoog -> met de klok mee (rechts).
-    if (b == LOW) step = -1; // LINKS
-    else          step = +1; // RECHTS
-
-    Serial.print(F("[ENC] A↑  B="));
-    Serial.print(b);
-    Serial.print(F("  step="));
-    Serial.println(step);
+    // Met INPUT_PULLUP: LOW = naar GND getrokken.
+    // B laag -> links, B hoog -> rechts.
+    step = (b == LOW) ? -1 : +1;
   }
   lastA = a;
   return step;
 }
 
-// Button click (actief LOW) + debounce
+// Button click (actief LOW) + debounce (korte druk)
 bool buttonClicked() {
   if (digitalRead(ENC_SW) == LOW) {
     unsigned long now = millis();
@@ -217,7 +240,6 @@ bool buttonClicked() {
       lastButtonMs = now;
       // wacht tot los (kort)
       while (digitalRead(ENC_SW) == LOW) { delay(5); }
-      Serial.println(F("[BTN] Klik!"));
       return true;
     }
   }
@@ -228,92 +250,119 @@ bool buttonClicked() {
 
 void render() {
   if (!needRedraw) return;
-
-  switch (ui) {
-    case HOME:
-      drawHome();
-      Serial.print(F("[UI] HOME  selectedIndex="));
-      Serial.println(selectedIndex);
-      break;
-    case PAGE_RED:
-      drawFullColor(RED, "Channel");
-      Serial.println(F("[UI] PAGE_RED"));
-      break;
-    case PAGE_BLUE:
-      drawFullColor(BLUE, "Timer");
-      Serial.println(F("[UI] PAGE_BLUE"));
-      break;
-  }
-
+  drawHome();
   needRedraw = false;
 }
 
 void setup() {
-  // Serial debug
   Serial.begin(9600);
   while (!Serial) { /* voor sommige boards */ }
-  Serial.println(F("Start menu + encoder debug"));
 
   // Encoder – PULLUP en common naar GND
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
   lastA = digitalRead(ENC_A);
-  Serial.print(F("[Pins] ENC_A=")); Serial.print(ENC_A);
-  Serial.print(F(" ENC_B=")); Serial.print(ENC_B);
-  Serial.print(F(" ENC_SW=")); Serial.println(ENC_SW);
 
   // OLED init
   pinMode(OLED_CS, OUTPUT);
   digitalWrite(OLED_CS, HIGH);
   display.begin();
   display.setRotation(0);
+  display.setTextWrap(false);
+
+  // Start-state
+  mode = MODE_SELECT;
+  selectedIndex = 0;
+  timerEditField = 0;
 
   needRedraw = true;
   render();
 }
 
+
 void loop() {
-  // 1) Encoder draaien -> selectie (alleen in HOME)
-  if (ui == HOME) {
-    int8_t step = readEncoderStep();
-    if (step != 0) {
+  // 1) Encoder draaien
+  int8_t step = readEncoderStep();
+  if (step != 0) {
+
+    // -------- SELECT MODE --------
+    if (mode == MODE_SELECT) {
       int8_t old = selectedIndex;
       selectedIndex += (step > 0) ? 1 : -1;
-      if (selectedIndex < 0) selectedIndex = 0;
-      if (selectedIndex > 1) selectedIndex = 1;
 
-      if (selectedIndex != old) {
-        Serial.print(F("[SEL] ")); Serial.println(selectedIndex);
-        needRedraw = true;
-      } else {
-        Serial.println(F("[SEL] aan grens (0..1)"));
+      if (selectedIndex < 0) selectedIndex = 0;
+      if (selectedIndex > 2) selectedIndex = 2;
+
+      if (selectedIndex != old) needRedraw = true;
+    }
+
+    // -------- EDIT MODE --------
+    else { // MODE_EDIT
+      if (selectedIndex == 0) {
+        // Channel 1..255 met wrap
+        int16_t ch = channel + (step > 0 ? 1 : -1);
+        if (ch < 1)   ch = 255;
+        if (ch > 255) ch = 1;
+        channel = (uint8_t)ch;
       }
+      else if (selectedIndex == 1) {
+        // Timer (MM : SS)
+        if (timerEditField == 0) {
+          int16_t mm = minutes + (step > 0 ? 1 : -1);
+          if (mm < 0)  mm = 59;
+          if (mm > 59) mm = 0;
+          minutes = (uint8_t)mm;
+        } else {
+          int16_t ss = seconds + (step > 0 ? 1 : -1);
+          if (ss > 59) {
+            ss = 0;
+            minutes = (minutes + 1) % 60;
+          } else if (ss < 0) {
+            ss = 59;
+            minutes = (minutes == 0) ? 59 : minutes - 1;
+          }
+          seconds = (uint8_t)ss;
+        }
+      }
+      else if (selectedIndex == 2) {
+        // Duration (seconden, wrap 0..59)
+        int16_t ss = seconds_dur + (step > 0 ? 1 : -1);
+        if (ss > 59) ss = 0;
+        else if (ss < 0) ss = 59;
+        seconds_dur = (uint8_t)ss;
+      }
+
+      needRedraw = true;
     }
   }
 
-  // 2) Druk -> HOME <-> pagina
+  // 2) Drukknop
   if (buttonClicked()) {
-    if (ui == HOME) {
-      ui = (selectedIndex == 0) ? PAGE_RED : PAGE_BLUE;
-    } else {
-      ui = HOME;
+    if (mode == MODE_SELECT) {
+      mode = MODE_EDIT;
+      if (selectedIndex == 1) {
+        timerEditField = 0; // start op minutes
+      }
+    } 
+    else { // MODE_EDIT
+      if (selectedIndex == 0 || selectedIndex == 2) {
+        mode = MODE_SELECT;
+      }
+      else if (selectedIndex == 1) {
+        if (timerEditField == 0) {
+          timerEditField = 1;
+        } else {
+          timerEditField = 0;
+          mode = MODE_SELECT;
+        }
+      }
     }
+
     needRedraw = true;
   }
 
   // 3) Render indien nodig
   render();
 }
-
-
-
-
-
-
-
-
-
-
-
 
