@@ -4,64 +4,99 @@
 #include <Adafruit_SSD1351.h>
 #include <avr/pgmspace.h>
 
-// ----------------- OLED SPI pins (UNO/Nano) -----------------
+// ===========================================================
+// OLED + ENCODER CONFIG
+// ===========================================================
+
 #define OLED_CS   10
 #define OLED_DC    7
 #define OLED_RST   8
 Adafruit_SSD1351 display(128, 128, &SPI, OLED_CS, OLED_DC, OLED_RST);
 
-// ----------------- Rotary encoder pins -----------------
-#define ENC_A   5    // (kan later naar 2 als je DMX op D3 wil gebruiken)
+#define ENC_A   5
 #define ENC_B   4
-#define ENC_SW  2    // drukknop (actief LOW, met INPUT_PULLUP)
+#define ENC_SW  2
 
-// ----------------- Kleuren (RGB565) -----------------
+// Colors (RGB565)
 #define BLACK   0x0000
 #define WHITE   0xFFFF
 #define GREY    0x7BEF
-#define RED     0xF800
 #define BLUE    0x001F
 
-// ----------------- UI-state -----------------
-enum UiMode  { MODE_SELECT, MODE_EDIT };
+// ===========================================================
+// UI STATE
+// ===========================================================
+
+enum UiMode { MODE_SELECT, MODE_EDIT };
 UiMode mode = MODE_SELECT;
 
-int8_t selectedIndex = 0;   // 0 = Channel, 1 = Timer, 2=duration
-bool needRedraw = true;
+// 0 = Channel, 1 = Timer, 2 = Duration
+int8_t selectedIndex = 0;
+int8_t lastSelectedIndex = -1;
 
-// Encoder intern
-int lastA = HIGH;           // edge-detectie op A (met pullup is idle HIGH)
+uint8_t channel     = 1;
+uint8_t minutes     = 10;
+uint8_t seconds     = 0;
+uint8_t seconds_dur = 0;
+
+// Timer edit: 0 = MM, 1 = SS
+uint8_t timerEditField = 0;
+
+// Redraw flags
+bool redrawStatic    = true;
+bool redrawHighlight = true;
+bool redrawValues    = true;
+bool redrawEditBox   = true;
+
+// ===========================================================
+// ENCODER
+// ===========================================================
+
+int lastA = HIGH;
 unsigned long lastButtonMs = 0;
 const unsigned long debounceMs = 180;
 
-// ----------------- Instelbare waarden -----------------
-uint8_t channel = 1;    // 1..255 (wrap)
-uint8_t minutes = 10;   // 0..59
-uint8_t seconds = 0;    // 0..59
-uint8_t seconds_dur=0;
+// ===========================================================
+// LAYOUT CONSTANTS
+// ===========================================================
 
-// Bij TIMER-bewerken: 0 = minutes, 1 = seconds
-uint8_t timerEditField = 0;
+#define ROW_X      2
+#define ROW_W    124   // 128 - 2*2
+#define ROW_H     16
+
+
+const int16_t MARGIN_X = 5;
+const int16_t TITLE_Y  = 8;
+const int16_t LINE_H   = 18;
+const int16_t ITEM1_Y  = TITLE_Y + 24;
+const int16_t ITEM2_Y  = ITEM1_Y + LINE_H;
+const int16_t ITEM3_Y  = ITEM2_Y + LINE_H;
+const int16_t VAL_X    = MARGIN_X + 68;
+
+
+// Breedtes (afstemmen op font size 1)
+#define VALUE_W   36
+#define VALUE_H   10
+
+// Timer subvelden
+#define TIME_MM_W  12   // "00"
+#define TIME_COL_W  6   // ":"
+#define TIME_SS_W  12   // "00"
+
+
+// ===========================================================
+// LOGO (exact jouw data, ongewijzigd)
+// ===========================================================
+
 
 
 // ----------------- LOGO (1-bit bitmap, PROGMEM) -----------------
 // 'TRBL-Logo-Zwart-transparant-Zoomed16x9', 50x30px; tool exporteert 8 bytes/rij -> 240 bytes
-const unsigned char epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9 [] PROGMEM = {
-  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 
-  0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 
-  0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x7f, 
-  0xc0, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xc0, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xc0, 0xff, 
-  0xf1, 0x8c, 0x23, 0x8c, 0xff, 0xc0, 0xff, 0xf1, 0x9e, 0x23, 0x88, 0xff, 0xc0, 0xff, 0xf1, 0x9e, 
-  0x23, 0x98, 0xff, 0xc0, 0xff, 0xf1, 0x1e, 0x20, 0x18, 0xff, 0xc0, 0xff, 0xf3, 0x18, 0x60, 0x18, 
-  0xff, 0xc0, 0xff, 0xe3, 0x00, 0xc0, 0x19, 0xff, 0xc0, 0xff, 0xe3, 0x01, 0xc6, 0x11, 0xff, 0xc0, 
-  0xff, 0xe3, 0x03, 0x8f, 0x31, 0xff, 0xc0, 0xff, 0xe2, 0x23, 0x8f, 0x31, 0xff, 0xc0, 0xff, 0xe6, 
-  0x21, 0x8e, 0x31, 0xff, 0xc0, 0xff, 0xc6, 0x31, 0x80, 0x30, 0x01, 0xc0, 0xff, 0xc6, 0x30, 0xc0, 
-  0x20, 0x03, 0xc0, 0xff, 0xc6, 0x78, 0xe0, 0x60, 0x03, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 
-  0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 
-  0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 
-  0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 
-  0xff, 0xc0
-};
+
+
+
+
+#include "logo.h"   // ✅ zet hier jouw bitmap in aparte .h (zoals je nu hebt)
 
 
 
@@ -106,263 +141,314 @@ void drawMonoBitmap_P_stride(
 
 
 
-void drawTextLeft(const char* txt, int16_t x, int16_t y, uint8_t size, uint16_t color) {
+
+
+// ===========================================================
+// HELPERS
+// ===========================================================
+
+void drawText(const char* txt, int16_t x, int16_t y, uint8_t size, uint16_t color) {
   display.setTextSize(size);
   display.setTextColor(color);
   display.setCursor(x, y);
   display.print(txt);
 }
 
-void formatTime(char* out, size_t outLen, uint8_t mm, uint8_t ss) {
-  snprintf(out, outLen, "%02u:%02u", mm, ss);
+// Geeft Y-positie van rij 0,1,2
+int16_t itemY(int index) {
+  return (index == 0) ? ITEM1_Y :
+         (index == 1) ? ITEM2_Y : ITEM3_Y;
 }
 
-// ----------------- Home scherm (select + inline edit) -----------------
 
-void drawHome() {
+
+void redrawRow(int index) {
+  if (index < 0 || index > 2) return;
+
+  int16_t y = itemY(index);
+
+  // ---- Achtergrond (highlight of wit) ----
+  uint16_t bg = (selectedIndex == index) ? GREY : WHITE;
+  display.fillRect(ROW_X, y - 2, ROW_W, ROW_H, bg);
+
+  // ---- Label ----
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+
+  if (index == 0) {
+    display.setCursor(MARGIN_X + 2, y);
+    display.print("Channel:");
+  }
+  else if (index == 1) {
+    display.setCursor(MARGIN_X + 2, y);
+    display.print("Timer:");
+  }
+  else if (index == 2) {
+    display.setCursor(MARGIN_X + 2, y);
+    display.print("Duration:");
+  }
+
+  // ---- Waarde ----
+  char buf[8];
+  if (index == 0) {
+    snprintf(buf, sizeof(buf), "%u", channel);
+  }
+  else if (index == 1) {
+    snprintf(buf, sizeof(buf), "%02u:%02u", minutes, seconds);
+  }
+  else {
+    snprintf(buf, sizeof(buf), "%u", seconds_dur);
+  }
+
+  display.setCursor(VAL_X, y);
+  display.print(buf);
+
+  // ---- Edit kader ----
+  if (mode == MODE_EDIT && selectedIndex == index) {
+    display.drawRect(VAL_X - 2, y - 2, 44, ROW_H, BLUE);
+  }
+}
+
+
+
+// ===========================================================
+// STATIC UI (1x tekenen)
+// ===========================================================
+
+
+
+void drawStaticUI() {
   display.fillScreen(WHITE);
 
-  const int16_t MARGIN_X = 5;
-  const int16_t TITLE_Y  = 8;
-  const int16_t LINE_H   = 18;              // kleiner: minder verticale ruimte
-  const int16_t HILIGHT_H = 14;             // highlight iets compacter
-  const int16_t ITEM1_Y  = TITLE_Y + 18 + 6; // "Menu" + kleinere marge
-  const int16_t ITEM2_Y  = ITEM1_Y + LINE_H;
-  const int16_t ITEM3_Y  = ITEM2_Y + LINE_H;
+  drawText("Menu", MARGIN_X, TITLE_Y, 2, BLACK);
+  drawText("Channel:",  MARGIN_X + 2, ITEM1_Y, 1, BLACK);
+  drawText("Timer:",    MARGIN_X + 2, ITEM2_Y, 1, BLACK);
+  drawText("Duration:", MARGIN_X + 2, ITEM3_Y, 1, BLACK);
 
-  drawTextLeft("Menu", MARGIN_X, TITLE_Y, 2, BLACK);
-
-  // --- Grijze highlightbalk voor geselecteerde rij (nu 3 cases) ---
-  if (selectedIndex == 0) {
-    display.fillRect(MARGIN_X, ITEM1_Y - 2, 118, HILIGHT_H, GREY);
-  } else if (selectedIndex == 1) {
-    display.fillRect(MARGIN_X, ITEM2_Y - 2, 118, HILIGHT_H, GREY);
-  } else { // selectedIndex == 2
-    display.fillRect(MARGIN_X, ITEM3_Y - 2, 118, HILIGHT_H, GREY);
-  }
-
-  // Labels
-  drawTextLeft("Channel:",  MARGIN_X + 2, ITEM1_Y, 1, BLACK);
-  drawTextLeft("Timer:",    MARGIN_X + 2, ITEM2_Y, 1, BLACK);
-  drawTextLeft("Duration:", MARGIN_X + 2, ITEM3_Y, 1, BLACK);
-
-  // Waarde-posities
-  const int16_t VAL_X = MARGIN_X + 68;  // iets dichter
-
-  // Channel-waarde
-  char chBuf[8];
-  snprintf(chBuf, sizeof(chBuf), "%u", channel);
-  drawTextLeft(chBuf, VAL_X, ITEM1_Y, 1, BLACK);
-
-  // Timer-waarde (MM:SS)
-  char timeBuf[6];
-  formatTime(timeBuf, sizeof(timeBuf), minutes, seconds);
-  drawTextLeft(timeBuf, VAL_X, ITEM2_Y, 1, BLACK);
-
-  // Duration-waarde (alleen seconden)
-  char durBuf[8];
-  snprintf(durBuf, sizeof(durBuf), "%u", seconds_dur);
-  drawTextLeft(durBuf, VAL_X, ITEM3_Y, 1, BLACK);
-
-  // --- Blauwe kader rond de waarde die je aan het bewerken bent ---
-  if (mode == MODE_EDIT) {
-    display.setTextSize(1);
-
-    if (selectedIndex == 0) {
-      // Channel -> kader om getal
-      int16_t x1, y1; uint16_t w, h;
-      display.getTextBounds(chBuf, 0, 0, &x1, &y1, &w, &h);
-      display.drawRect(VAL_X - 2, ITEM1_Y - 2, w + 4, h + 4, BLUE);
-    }
-    else if (selectedIndex == 1) {
-      // Timer -> kader om MM of SS
-      int16_t xMM1, yMM1; uint16_t wMM, hMM;
-      display.getTextBounds("00", 0, 0, &xMM1, &yMM1, &wMM, &hMM);
-      int16_t xMMcol1, yMMcol1; uint16_t wMMcol, hMMcol;
-      display.getTextBounds("00:", 0, 0, &xMMcol1, &yMMcol1, &wMMcol, &hMMcol);
-
-      int16_t mmX  = VAL_X;
-      int16_t ssX  = VAL_X + wMMcol;
-      int16_t boxY = ITEM2_Y - 2;
-      uint16_t boxH = hMM + 4;
-      uint16_t boxW = wMM + 4;
-
-      if (timerEditField == 0) {
-        display.drawRect(mmX - 2, boxY, boxW, boxH, BLUE);
-      } else {
-        display.drawRect(ssX - 2, boxY, boxW, boxH, BLUE);
-      }
-    }
-    else if (selectedIndex == 2) {
-      // Duration -> kader om secondenwaarde
-      int16_t x1, y1; uint16_t w, h;
-      display.getTextBounds(durBuf, 0, 0, &x1, &y1, &w, &h);
-      display.drawRect(VAL_X - 2, ITEM3_Y - 2, w + 4, h + 4, BLUE);
-    }
-  }
-
-  // Logo onderaan gecentreerd
+  // Logo
   int16_t logoX = (128 - LOGO_W) / 2;
-  int16_t logoY = 128 - LOGO_H - 6;   // iets dichter tegen onderrand
+  int16_t logoY = 128 - LOGO_H - 6;
+
   drawMonoBitmap_P_stride(
-    logoX, logoY, LOGO_W, LOGO_H,
+    logoX, logoY,
+    LOGO_W, LOGO_H,
     epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9,
-    LOGO_BPR,
-    BLACK,
-    LOGO_INVERT_BITS
+    LOGO_BPR, BLACK, LOGO_INVERT_BITS
   );
 }
 
+// ===========================================================
+// HIGHLIGHT
+// ===========================================================
 
-// ---------- Encoder & Button ----------
+void clearHighlight(int index) {
+  display.fillRect(MARGIN_X, itemY(index) - 2, 118, 14, WHITE);
+  
+}
 
-// Encoder step: -1 (links), +1 (rechts), 0 (geen)
+void drawHighlight(int index) {
+  display.fillRect(ROW_X, itemY(index) - 2, ROW_W, ROW_H, GREY);
+}
+
+// ===========================================================
+// VALUES
+// ===========================================================
+
+void drawValues() {
+  char buf[8];
+
+  // Channel
+  display.fillRect(VAL_X - 1, ITEM1_Y - 1, 40, 10, WHITE);
+  snprintf(buf, sizeof(buf), "%u", channel);
+  drawText(buf, VAL_X, ITEM1_Y, 1, BLACK);
+
+  // Timer
+  display.fillRect(VAL_X - 1, ITEM2_Y - 1, 40, 10, WHITE);
+  snprintf(buf, sizeof(buf), "%02u:%02u", minutes, seconds);
+  drawText(buf, VAL_X, ITEM2_Y, 1, BLACK);
+
+  // Duration (seconds only)
+  display.fillRect(VAL_X - 1, ITEM3_Y - 1, 40, 10, WHITE);
+  snprintf(buf, sizeof(buf), "%u", seconds_dur);
+  drawText(buf, VAL_X, ITEM3_Y, 1, BLACK);
+}
+
+// ===========================================================
+// EDIT BOX
+// ===========================================================
+
+void clearEditBox() {
+  display.drawRect(VAL_X - 2, ITEM1_Y - 2, 44, 14, WHITE);
+  display.drawRect(VAL_X - 2, ITEM2_Y - 2, 44, 14, WHITE);
+  display.drawRect(VAL_X - 2, ITEM3_Y - 2, 44, 14, WHITE);
+  
+}
+
+void drawEditBox() {
+  if (mode != MODE_EDIT) return;
+
+  int16_t y = itemY(selectedIndex);
+  display.drawRect(VAL_X - 2, y - 2, 44, 14, BLUE);
+}
+
+// ===========================================================
+// ENCODER + BUTTON
+// ===========================================================
+
 int8_t readEncoderStep() {
   int a = digitalRead(ENC_A);
   int8_t step = 0;
-
-  // detecteer opgaande flank van A
   if (lastA == LOW && a == HIGH) {
-    int b = digitalRead(ENC_B);
-    // Met INPUT_PULLUP: LOW = naar GND getrokken.
-    // B laag -> links, B hoog -> rechts.
-    step = (b == LOW) ? -1 : +1;
+    step = (digitalRead(ENC_B) == LOW) ? -1 : 1;
   }
   lastA = a;
   return step;
 }
 
-// Button click (actief LOW) + debounce (korte druk)
 bool buttonClicked() {
   if (digitalRead(ENC_SW) == LOW) {
     unsigned long now = millis();
     if (now - lastButtonMs > debounceMs) {
       lastButtonMs = now;
-      // wacht tot los (kort)
-      while (digitalRead(ENC_SW) == LOW) { delay(5); }
+      while (digitalRead(ENC_SW) == LOW) delay(5);
       return true;
     }
   }
   return false;
 }
 
-// ---------- Render ----------
+// ===========================================================
+// RENDER
+// ===========================================================
 
-void render() {
-  if (!needRedraw) return;
-  drawHome();
-  needRedraw = false;
+// void render() {
+//   if (redrawStatic) {
+//     drawStaticUI();
+//     redrawStatic = false;
+//     redrawHighlight = redrawValues = redrawEditBox = true;
+//   }
+
+//   if (redrawHighlight) {
+//     if (lastSelectedIndex >= 0)
+//       clearHighlight(lastSelectedIndex);
+//     drawHighlight(selectedIndex);
+//     lastSelectedIndex = selectedIndex;
+//     redrawHighlight = false;
+//   }
+
+//   if (redrawValues) {
+//     drawValues();
+//     redrawValues = false;
+//   }
+
+//   if (redrawEditBox) {
+//     clearEditBox();
+//     drawEditBox();
+//     redrawEditBox = false;
+//   }
+// }
+
+void render(bool full = false) {
+  if (full) {
+    drawStaticUI();
+    redrawRow(0);
+    redrawRow(1);
+    redrawRow(2);
+  }
 }
 
-void setup() {
-  Serial.begin(9600);
-  while (!Serial) { /* voor sommige boards */ }
 
-  // Encoder – PULLUP en common naar GND
+// ===========================================================
+// SETUP
+// ===========================================================
+
+// void setup() {
+//   pinMode(ENC_A, INPUT_PULLUP);
+//   pinMode(ENC_B, INPUT_PULLUP);
+//   pinMode(ENC_SW, INPUT_PULLUP);
+  
+//   redrawStatic    = true;
+//   redrawHighlight = true;
+//   redrawValues    = true;
+//   redrawEditBox   = true;
+
+//   lastSelectedIndex = -1;
+
+
+//   display.begin();
+//   display.setRotation(0);
+//   display.setTextWrap(false);
+
+//   redrawStatic = true;
+//   render();
+// }
+
+
+void setup() {
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
-  lastA = digitalRead(ENC_A);
 
-  // OLED init
-  pinMode(OLED_CS, OUTPUT);
-  digitalWrite(OLED_CS, HIGH);
   display.begin();
   display.setRotation(0);
   display.setTextWrap(false);
 
-  // Start-state
-  mode = MODE_SELECT;
-  selectedIndex = 0;
-  timerEditField = 0;
+  lastSelectedIndex = -1;
 
-  needRedraw = true;
-  render();
+  render(true); // VOLLEDIGE eerste draw
 }
+
+
+// ===========================================================
+// LOOP
+// ===========================================================
 
 
 void loop() {
-  // 1) Encoder draaien
   int8_t step = readEncoderStep();
-  if (step != 0) {
 
-    // -------- SELECT MODE --------
+  // ===== ROTARY =====
+  if (step != 0) {
     if (mode == MODE_SELECT) {
       int8_t old = selectedIndex;
       selectedIndex += (step > 0) ? 1 : -1;
+      selectedIndex = constrain(selectedIndex, 0, 2);
 
-      if (selectedIndex < 0) selectedIndex = 0;
-      if (selectedIndex > 2) selectedIndex = 2;
-
-      if (selectedIndex != old) needRedraw = true;
+      if (old != selectedIndex) {
+        redrawRow(old);
+        redrawRow(selectedIndex);
+      }
     }
-
-    // -------- EDIT MODE --------
     else { // MODE_EDIT
       if (selectedIndex == 0) {
-        // Channel 1..255 met wrap
-        int16_t ch = channel + (step > 0 ? 1 : -1);
-        if (ch < 1)   ch = 255;
-        if (ch > 255) ch = 1;
-        channel = (uint8_t)ch;
+        channel = (channel + (step > 0 ? 1 : -1) + 254) % 255 + 1;
       }
       else if (selectedIndex == 1) {
-        // Timer (MM : SS)
-        if (timerEditField == 0) {
-          int16_t mm = minutes + (step > 0 ? 1 : -1);
-          if (mm < 0)  mm = 59;
-          if (mm > 59) mm = 0;
-          minutes = (uint8_t)mm;
-        } else {
-          int16_t ss = seconds + (step > 0 ? 1 : -1);
-          if (ss > 59) {
-            ss = 0;
-            minutes = (minutes + 1) % 60;
-          } else if (ss < 0) {
-            ss = 59;
-            minutes = (minutes == 0) ? 59 : minutes - 1;
-          }
-          seconds = (uint8_t)ss;
-        }
+        if (timerEditField == 0)
+          minutes = (minutes + (step > 0 ? 1 : -1) + 60) % 60;
+        else
+          seconds = (seconds + (step > 0 ? 1 : -1) + 60) % 60;
       }
-      else if (selectedIndex == 2) {
-        // Duration (seconden, wrap 0..59)
-        int16_t ss = seconds_dur + (step > 0 ? 1 : -1);
-        if (ss > 59) ss = 0;
-        else if (ss < 0) ss = 59;
-        seconds_dur = (uint8_t)ss;
+      else {
+        seconds_dur = (seconds_dur + (step > 0 ? 1 : -1) + 60) % 60;
       }
-
-      needRedraw = true;
+      redrawRow(selectedIndex);
     }
   }
 
-  // 2) Drukknop
+  // ===== BUTTON =====
   if (buttonClicked()) {
     if (mode == MODE_SELECT) {
       mode = MODE_EDIT;
-      if (selectedIndex == 1) {
-        timerEditField = 0; // start op minutes
-      }
-    } 
-    else { // MODE_EDIT
-      if (selectedIndex == 0 || selectedIndex == 2) {
+      timerEditField = 0;
+    }
+    else {
+      if (selectedIndex == 1 && timerEditField == 0) {
+        timerEditField = 1;
+      } else {
         mode = MODE_SELECT;
       }
-      else if (selectedIndex == 1) {
-        if (timerEditField == 0) {
-          timerEditField = 1;
-        } else {
-          timerEditField = 0;
-          mode = MODE_SELECT;
-        }
-      }
     }
-
-    needRedraw = true;
+    redrawRow(selectedIndex);
   }
-
-  // 3) Render indien nodig
-  render();
 }
-
