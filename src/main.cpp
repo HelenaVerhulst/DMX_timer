@@ -154,12 +154,29 @@ inline void updateMinutes(int8_t step) {
   minutes = (uint8_t)mm;
 }
 
-inline void updateSeconds(int8_t step) {
+
+
+// Return true ALS minuten zijn aangepast
+inline bool updateSeconds(int8_t step) {
   int16_t ss = seconds + (step > 0 ? 1 : -1);
-  if (ss < 0)  ss = 59;
-  if (ss > 59) ss = 0;
+  bool minutesChanged = false;
+
+  if (ss > 59) {
+    ss = 0;
+    minutes = (minutes + 1) % 60;
+    minutesChanged = true;
+  }
+  else if (ss < 0) {
+    ss = 59;
+    minutes = (minutes == 0) ? 59 : minutes - 1;
+    minutesChanged = true;
+  }
+
   seconds = (uint8_t)ss;
+  return minutesChanged;
 }
+
+
 
 inline void updateDuration(int8_t step) {
   int16_t ss = seconds_dur + (step > 0 ? 1 : -1);
@@ -426,8 +443,17 @@ void loop() {
           updateMinutes(step);
           redrawTimerMinutes();  // alleen MM
         } else {
-          updateSeconds(step);
-          redrawTimerSeconds();  // alleen SS
+          
+          bool mmChanged = updateSeconds(step);
+
+          // Seconden zijn ALTIJD veranderd
+          redrawTimerSeconds();
+
+          // Minuten alleen hertekenen als ze effectief aangepast zijn
+          if (mmChanged) {
+            redrawTimerMinutes();
+          }
+
         }
       }
       else if (selectedIndex == 2) {
