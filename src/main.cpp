@@ -34,19 +34,13 @@ UiMode mode = MODE_SELECT;
 int8_t selectedIndex = 0;
 int8_t lastSelectedIndex = -1;
 
-uint8_t channel     = 1;
-uint8_t minutes     = 10;
-uint8_t seconds     = 0;
-uint8_t seconds_dur = 0;
+uint8_t channel     = 1;   // 1..255 (wrap)
+uint8_t minutes     = 10;  // 0..59
+uint8_t seconds     = 0;   // 0..59
+uint8_t seconds_dur = 0;   // 0..59
 
 // Timer edit: 0 = MM, 1 = SS
 uint8_t timerEditField = 0;
-
-// Redraw flags
-bool redrawStatic    = true;
-bool redrawHighlight = true;
-bool redrawValues    = true;
-bool redrawEditBox   = true;
 
 // ===========================================================
 // ENCODER
@@ -64,7 +58,6 @@ const unsigned long debounceMs = 180;
 #define ROW_W    124   // 128 - 2*2
 #define ROW_H     16
 
-
 const int16_t MARGIN_X = 5;
 const int16_t TITLE_Y  = 8;
 const int16_t LINE_H   = 18;
@@ -73,8 +66,7 @@ const int16_t ITEM2_Y  = ITEM1_Y + LINE_H;
 const int16_t ITEM3_Y  = ITEM2_Y + LINE_H;
 const int16_t VAL_X    = MARGIN_X + 68;
 
-
-// Breedtes (afstemmen op font size 1)
+// Breedtes (afgestemd op font size 1)
 #define VALUE_W   36
 #define VALUE_H   10
 
@@ -83,22 +75,11 @@ const int16_t VAL_X    = MARGIN_X + 68;
 #define TIME_COL_W  6   // ":"
 #define TIME_SS_W  12   // "00"
 
-
 // ===========================================================
-// LOGO (exact jouw data, ongewijzigd)
+// LOGO (jouw data in aparte header)
 // ===========================================================
 
-
-
-// ----------------- LOGO (1-bit bitmap, PROGMEM) -----------------
-// 'TRBL-Logo-Zwart-transparant-Zoomed16x9', 50x30px; tool exporteert 8 bytes/rij -> 240 bytes
-
-
-
-
-#include "logo.h"   // ✅ zet hier jouw bitmap in aparte .h (zoals je nu hebt)
-
-
+#include "logo.h"   // moet 'epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9' definiëren
 
 constexpr int LOGO_W = 50;
 constexpr int LOGO_H = 30;
@@ -112,7 +93,9 @@ constexpr int LOGO_BPR = LOGO_BYTES / LOGO_H;  // 210/30=7 of 240/30=8
 // Invers tekenen (zwart <-> wit) voor 1-bit bitmap
 const bool LOGO_INVERT_BITS = true;
 
-// ----------------- Helpers -----------------
+// ===========================================================
+// BITMAP HELPER
+// ===========================================================
 
 // 1-bit PROGMEM bitmap tekenen (alleen bits -> GEEN kader)
 void drawMonoBitmap_P_stride(
@@ -139,10 +122,6 @@ void drawMonoBitmap_P_stride(
   }
 }
 
-
-
-
-
 // ===========================================================
 // HELPERS
 // ===========================================================
@@ -160,7 +139,38 @@ int16_t itemY(int index) {
          (index == 1) ? ITEM2_Y : ITEM3_Y;
 }
 
+// ---- Kleine update helpers ----
+inline void updateChannel(int8_t step) {
+  int16_t ch = channel + (step > 0 ? 1 : -1);
+  if (ch < 1)   ch = 255;
+  if (ch > 255) ch = 1;
+  channel = (uint8_t)ch;
+}
 
+inline void updateMinutes(int8_t step) {
+  int16_t mm = minutes + (step > 0 ? 1 : -1);
+  if (mm < 0)  mm = 59;
+  if (mm > 59) mm = 0;
+  minutes = (uint8_t)mm;
+}
+
+inline void updateSeconds(int8_t step) {
+  int16_t ss = seconds + (step > 0 ? 1 : -1);
+  if (ss < 0)  ss = 59;
+  if (ss > 59) ss = 0;
+  seconds = (uint8_t)ss;
+}
+
+inline void updateDuration(int8_t step) {
+  int16_t ss = seconds_dur + (step > 0 ? 1 : -1);
+  if (ss < 0)  ss = 59;
+  if (ss > 59) ss = 0;
+  seconds_dur = (uint8_t)ss;
+}
+
+// ===========================================================
+// ROW-BASED REDRAW (layout of selectie wisselt)
+// ===========================================================
 
 void redrawRow(int index) {
   if (index < 0 || index > 2) return;
@@ -188,7 +198,7 @@ void redrawRow(int index) {
     display.print("Duration:");
   }
 
-  // ---- Waarde ----
+  // ---- Waarde ---- (volledige waarde schrijven)
   char buf[8];
   if (index == 0) {
     snprintf(buf, sizeof(buf), "%u", channel);
@@ -199,28 +209,118 @@ void redrawRow(int index) {
   else {
     snprintf(buf, sizeof(buf), "%u", seconds_dur);
   }
-
   display.setCursor(VAL_X, y);
   display.print(buf);
 
   // ---- Edit kader ----
   if (mode == MODE_EDIT && selectedIndex == index) {
-    display.drawRect(VAL_X - 2, y - 2, 44, ROW_H, BLUE);
+    if (index == 1) {
+      // Timer: subveld-kader apart
+      // (de juiste blauwe kader wordt elders getekend)
+      // -> Eerst beide wissen (maar de rij is net getekend op wit/grijs)
+      // -> Dan de actieve tekenen:
+      int16_t yy = ITEM2_Y;
+      if (timerEditField == 0) {
+        display.drawRect(VAL_X - 2, yy - 2, TIME_MM_W + 4, ROW_H, BLUE);
+      } else {
+        int16_t ssx = VAL_X + TIME_MM_W + TIME_COL_W;
+        display.drawRect(ssx - 2, yy - 2, TIME_SS_W + 4, ROW_H, BLUE);
+      }
+    } else {
+      // Channel of Duration: 1 kader
+      display.drawRect(VAL_X - 2, y - 2, 44, ROW_H, BLUE);
+    }
   }
 }
 
+// ===========================================================
+// VALUE-ONLY REDRAWS (géén rij opnieuw)
+// ===========================================================
 
+void redrawChannelValue() {
+  int16_t y = ITEM1_Y;
+  display.fillRect(VAL_X - 1, y - 1, VALUE_W, VALUE_H, (selectedIndex == 0 ? GREY : WHITE));
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%u", channel);
+  display.setCursor(VAL_X, y);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.print(buf);
+  // kader blijft ongemoeid (wordt alleen bij mode/field wissel getekend)
+}
+
+int16_t timerMM_X() { return VAL_X; }
+int16_t timerSS_X() { return VAL_X + TIME_MM_W + TIME_COL_W; }
+
+void redrawTimerMinutes() {
+  int16_t y = ITEM2_Y;
+  // Wis enkel het MM blokje in rij-achtergrondkleur
+  uint16_t bg = (selectedIndex == 1 ? GREY : WHITE);
+  display.fillRect(timerMM_X() - 1, y - 1, TIME_MM_W, VALUE_H, bg);
+
+  char buf[4];
+  snprintf(buf, sizeof(buf), "%02u", minutes);
+  display.setCursor(timerMM_X(), y);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.print(buf);
+}
+
+void redrawTimerSeconds() {
+  int16_t y = ITEM2_Y;
+  uint16_t bg = (selectedIndex == 1 ? GREY : WHITE);
+  display.fillRect(timerSS_X() - 1, y - 1, TIME_SS_W, VALUE_H, bg);
+
+  char buf[4];
+  snprintf(buf, sizeof(buf), "%02u", seconds);
+  display.setCursor(timerSS_X(), y);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.print(buf);
+}
+
+void redrawDurationValue() {
+  int16_t y = ITEM3_Y;
+  display.fillRect(VAL_X - 1, y - 1, VALUE_W, VALUE_H, (selectedIndex == 2 ? GREY : WHITE));
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%u", seconds_dur);
+  display.setCursor(VAL_X, y);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.print(buf);
+}
+
+// ---- Timer kader wisselen zonder rij te herschrijven ----
+
+void clearTimerEditBoxes() {
+  int16_t y = ITEM2_Y;
+  // Overschrijven met rij-achtergrondkleur (GREY als geselecteerd)
+  uint16_t bg = (selectedIndex == 1 ? GREY : WHITE);
+  display.drawRect(VAL_X - 2,               y - 2, TIME_MM_W + 4, ROW_H, bg);
+  int16_t ssx = VAL_X + TIME_MM_W + TIME_COL_W;
+  display.drawRect(ssx - 2,                 y - 2, TIME_SS_W + 4, ROW_H, bg);
+}
+
+void drawTimerEditBox() {
+  if (mode != MODE_EDIT || selectedIndex != 1) return;
+  int16_t y = ITEM2_Y;
+  if (timerEditField == 0) {
+    display.drawRect(VAL_X - 2, y - 2, TIME_MM_W + 4, ROW_H, BLUE);
+  } else {
+    int16_t ssx = VAL_X + TIME_MM_W + TIME_COL_W;
+    display.drawRect(ssx - 2, y - 2, TIME_SS_W + 4, ROW_H, BLUE);
+  }
+}
 
 // ===========================================================
 // STATIC UI (1x tekenen)
 // ===========================================================
 
-
-
 void drawStaticUI() {
   display.fillScreen(WHITE);
 
   drawText("Menu", MARGIN_X, TITLE_Y, 2, BLACK);
+  // labels worden per rij in redrawRow ook gezet, maar dit helpt bij eerste frame
   drawText("Channel:",  MARGIN_X + 2, ITEM1_Y, 1, BLACK);
   drawText("Timer:",    MARGIN_X + 2, ITEM2_Y, 1, BLACK);
   drawText("Duration:", MARGIN_X + 2, ITEM3_Y, 1, BLACK);
@@ -235,60 +335,6 @@ void drawStaticUI() {
     epd_bitmap_TRBL_Logo_Zwart_transparant_Zoomed16x9,
     LOGO_BPR, BLACK, LOGO_INVERT_BITS
   );
-}
-
-// ===========================================================
-// HIGHLIGHT
-// ===========================================================
-
-void clearHighlight(int index) {
-  display.fillRect(MARGIN_X, itemY(index) - 2, 118, 14, WHITE);
-  
-}
-
-void drawHighlight(int index) {
-  display.fillRect(ROW_X, itemY(index) - 2, ROW_W, ROW_H, GREY);
-}
-
-// ===========================================================
-// VALUES
-// ===========================================================
-
-void drawValues() {
-  char buf[8];
-
-  // Channel
-  display.fillRect(VAL_X - 1, ITEM1_Y - 1, 40, 10, WHITE);
-  snprintf(buf, sizeof(buf), "%u", channel);
-  drawText(buf, VAL_X, ITEM1_Y, 1, BLACK);
-
-  // Timer
-  display.fillRect(VAL_X - 1, ITEM2_Y - 1, 40, 10, WHITE);
-  snprintf(buf, sizeof(buf), "%02u:%02u", minutes, seconds);
-  drawText(buf, VAL_X, ITEM2_Y, 1, BLACK);
-
-  // Duration (seconds only)
-  display.fillRect(VAL_X - 1, ITEM3_Y - 1, 40, 10, WHITE);
-  snprintf(buf, sizeof(buf), "%u", seconds_dur);
-  drawText(buf, VAL_X, ITEM3_Y, 1, BLACK);
-}
-
-// ===========================================================
-// EDIT BOX
-// ===========================================================
-
-void clearEditBox() {
-  display.drawRect(VAL_X - 2, ITEM1_Y - 2, 44, 14, WHITE);
-  display.drawRect(VAL_X - 2, ITEM2_Y - 2, 44, 14, WHITE);
-  display.drawRect(VAL_X - 2, ITEM3_Y - 2, 44, 14, WHITE);
-  
-}
-
-void drawEditBox() {
-  if (mode != MODE_EDIT) return;
-
-  int16_t y = itemY(selectedIndex);
-  display.drawRect(VAL_X - 2, y - 2, 44, 14, BLUE);
 }
 
 // ===========================================================
@@ -321,68 +367,19 @@ bool buttonClicked() {
 // RENDER
 // ===========================================================
 
-// void render() {
-//   if (redrawStatic) {
-//     drawStaticUI();
-//     redrawStatic = false;
-//     redrawHighlight = redrawValues = redrawEditBox = true;
-//   }
-
-//   if (redrawHighlight) {
-//     if (lastSelectedIndex >= 0)
-//       clearHighlight(lastSelectedIndex);
-//     drawHighlight(selectedIndex);
-//     lastSelectedIndex = selectedIndex;
-//     redrawHighlight = false;
-//   }
-
-//   if (redrawValues) {
-//     drawValues();
-//     redrawValues = false;
-//   }
-
-//   if (redrawEditBox) {
-//     clearEditBox();
-//     drawEditBox();
-//     redrawEditBox = false;
-//   }
-// }
-
 void render(bool full = false) {
   if (full) {
     drawStaticUI();
+    // Eerste keer alle rijen tekenen incl. highlight/waarden
     redrawRow(0);
     redrawRow(1);
     redrawRow(2);
   }
 }
 
-
 // ===========================================================
 // SETUP
 // ===========================================================
-
-// void setup() {
-//   pinMode(ENC_A, INPUT_PULLUP);
-//   pinMode(ENC_B, INPUT_PULLUP);
-//   pinMode(ENC_SW, INPUT_PULLUP);
-  
-//   redrawStatic    = true;
-//   redrawHighlight = true;
-//   redrawValues    = true;
-//   redrawEditBox   = true;
-
-//   lastSelectedIndex = -1;
-
-
-//   display.begin();
-//   display.setRotation(0);
-//   display.setTextWrap(false);
-
-//   redrawStatic = true;
-//   render();
-// }
-
 
 void setup() {
   pinMode(ENC_A, INPUT_PULLUP);
@@ -398,11 +395,9 @@ void setup() {
   render(true); // VOLLEDIGE eerste draw
 }
 
-
 // ===========================================================
 // LOOP
 // ===========================================================
-
 
 void loop() {
   int8_t step = readEncoderStep();
@@ -410,45 +405,72 @@ void loop() {
   // ===== ROTARY =====
   if (step != 0) {
     if (mode == MODE_SELECT) {
+      // Navigeren tussen rijen
       int8_t old = selectedIndex;
-      selectedIndex += (step > 0) ? 1 : -1;
-      selectedIndex = constrain(selectedIndex, 0, 2);
+      selectedIndex += (step > 0 ? 1 : -1);
+      if (selectedIndex < 0) selectedIndex = 0;
+      if (selectedIndex > 2) selectedIndex = 2;
 
       if (old != selectedIndex) {
         redrawRow(old);
         redrawRow(selectedIndex);
       }
     }
-    else { // MODE_EDIT
+    else { // MODE_EDIT: alleen minimale updates
       if (selectedIndex == 0) {
-        channel = (channel + (step > 0 ? 1 : -1) + 254) % 255 + 1;
+        updateChannel(step);
+        redrawChannelValue();
       }
       else if (selectedIndex == 1) {
-        if (timerEditField == 0)
-          minutes = (minutes + (step > 0 ? 1 : -1) + 60) % 60;
-        else
-          seconds = (seconds + (step > 0 ? 1 : -1) + 60) % 60;
+        if (timerEditField == 0) {
+          updateMinutes(step);
+          redrawTimerMinutes();  // alleen MM
+        } else {
+          updateSeconds(step);
+          redrawTimerSeconds();  // alleen SS
+        }
       }
-      else {
-        seconds_dur = (seconds_dur + (step > 0 ? 1 : -1) + 60) % 60;
+      else if (selectedIndex == 2) {
+        updateDuration(step);
+        redrawDurationValue();
       }
-      redrawRow(selectedIndex);
     }
   }
 
   // ===== BUTTON =====
   if (buttonClicked()) {
     if (mode == MODE_SELECT) {
+      // Start bewerken
       mode = MODE_EDIT;
       timerEditField = 0;
-    }
-    else {
-      if (selectedIndex == 1 && timerEditField == 0) {
-        timerEditField = 1;
+      if (selectedIndex == 1) {
+        // toon kader rond MM
+        drawTimerEditBox();
       } else {
-        mode = MODE_SELECT;
+        // voor Channel/Duration volstaat hertekenen van rij voor kader
+        redrawRow(selectedIndex);
       }
     }
-    redrawRow(selectedIndex);
+    else {
+      // In edit: gedrag per rij
+      if (selectedIndex == 1) {
+        // Timer: wissel MM <-> SS, of klaar
+        if (timerEditField == 0) {
+          // naar seconden: wissel alleen kader, geen tekst
+          clearTimerEditBoxes();
+          timerEditField = 1;
+          drawTimerEditBox();
+        } else {
+          // klaar met timer
+          mode = MODE_SELECT;
+          // volledige rij zodat kader verdwijnt en highlight correct blijft
+          redrawRow(selectedIndex);
+        }
+      } else {
+        // Channel/Duration: klaar
+        mode = MODE_SELECT;
+        redrawRow(selectedIndex);
+      }
+    }
   }
 }
