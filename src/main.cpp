@@ -525,30 +525,32 @@ void stopDmxSequence() {
 // SETUP
 // ===========================================================
 
+
 void setup() {
-  Serial.begin(250000);
+
+  // Encoder
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
 
+  // OLED
   display.begin();
   display.setRotation(0);
   display.setTextWrap(false);
+  render(true);
 
-  lastSelectedIndex = -1;
+  // ===========================
+  // DMX Upload‑Safe Mode -> want use serial pins
+  // ===========================
 
-  render(true); // VOLLEDIGE eerste draw
-
-  
- 
-  // DMX
-  DMXSerial.init(DMXController);   // correct ENUM, niet dmxcontroller()
   pinMode(DMX_DE, OUTPUT);
-  digitalWrite(DMX_DE, HIGH);      // MAX485 op zenden
+  digitalWrite(DMX_DE, LOW);      // driver disabled (RE/DE = LOW)
+  delay(200); // kleine veiligheidspauze
+  DMXSerial.init(DMXController);
+  digitalWrite(DMX_DE, HIGH);     // driver enabled (DMX OUT actief)
   DMXSerial.write(1, 0);
-
-  showStatus("Ready");
 }
+
 
 
 // ===========================================================
