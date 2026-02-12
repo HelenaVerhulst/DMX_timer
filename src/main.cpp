@@ -3,6 +3,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
 #include <avr/pgmspace.h>
+#include <DMXSerial.h>
+
+// Nu DMX doen:
+// pinnen juist zetten als 10 en 11 zit er een overlap met het oled_scherm dus moet hier een "timetable"/afspraken voor komen
+// DMX heeft min 1hz van info nodig liefst meer dus als oled niet nodig heeft kan men info sturen
+// daarna moet er met de opgeslagen data de dmx aangestuurd worden dus de channel, duration en timer zijn nodig voor de dmx aan te spreken
+// ook misschien de juiste error afhandeling naar het scherm als iets niet werkt??? (optioneel)
 
 // ===========================================================
 // OLED + ENCODER CONFIG
@@ -23,6 +30,7 @@ Adafruit_SSD1351 display(128, 128, &SPI, OLED_CS, OLED_DC, OLED_RST);
 #define GREY    0x7BEF
 #define BLUE    0x001F
 
+
 // ===========================================================
 // UI STATE
 // ===========================================================
@@ -34,7 +42,7 @@ UiMode mode = MODE_SELECT;
 int8_t selectedIndex = 0;
 int8_t lastSelectedIndex = -1;
 
-uint8_t channel     = 1;   // 1..255 (wrap)
+uint8_t channel     = 1;   // 1..521 (wrap)
 uint8_t minutes     = 10;  // 0..59
 uint8_t seconds     = 0;   // 0..59
 uint8_t seconds_dur = 0;   // 0..59
@@ -74,6 +82,24 @@ const int16_t VAL_X    = MARGIN_X + 68;
 #define TIME_MM_W  12   // "00"
 #define TIME_COL_W  6   // ":"
 #define TIME_SS_W  12   // "00"
+
+
+// ===========================================================
+// DMX DEFINITIES
+// ===========================================================
+
+#define DMX_TX 1     // Hardware UART TX voor DMX
+#define DMX_DE 12    // MAX485 Driver Enable
+
+enum DmxState { DMX_IDLE, DMX_WAIT, DMX_ACTIVE };
+DmxState dmxState = DMX_IDLE;
+
+unsigned long waitEndMs = 0;
+unsigned long activeEndMs = 0;
+unsigned long lastDMX = 0;
+const uint16_t DMX_RATE = 30;
+
+
 
 // ===========================================================
 // LOGO (jouw data in aparte header)
@@ -142,8 +168,8 @@ int16_t itemY(int index) {
 // ---- Kleine update helpers ----
 inline void updateChannel(int8_t step) {
   int16_t ch = channel + (step > 0 ? 1 : -1);
-  if (ch < 1)   ch = 255;
-  if (ch > 255) ch = 1;
+  if (ch < 1)   ch = 521;
+  if (ch > 521) ch = 1;
   channel = (uint8_t)ch;
 }
 
@@ -354,6 +380,16 @@ void drawStaticUI() {
   );
 }
 
+
+void showStatus(const char* msg) {
+  display.fillRect(0, 0, 128, 12, GREY);
+  display.setCursor(2, 2);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.print(msg);
+}
+
+
 // ===========================================================
 // ENCODER + BUTTON
 // ===========================================================
@@ -380,6 +416,16 @@ bool buttonClicked() {
   return false;
 }
 
+
+void showError(const char* msg) {
+  display.fillRect(0, 0, 128, 12, BLACK);
+  display.setCursor(2, 2);
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.print(msg);
+}
+
+
 // ===========================================================
 // RENDER
 // ===========================================================
@@ -394,11 +440,93 @@ void render(bool full = false) {
   }
 }
 
+
+// ===========================================================
+// DMX ENGINE
+// ===========================================================
+
+// Stuurt elk frame (30 Hz) de actuele waarde voor het gekozen kanaal
+void dmxWriteFrame() {
+  unsigned long now = millis();
+  if (now - lastDMX >= (1000UL / DMX_RATE)) {
+    lastDMX = now;
+
+    // Alleen tijdens ACTIVE kanaal op 255, anders 0
+    if (dmxState == DMX_ACTIVE) {
+      DMXSerial.write(channel, 255);
+    } else {
+      DMXSerial.write(channel, 0);
+    }
+  }
+}
+
+// State-machine: wachten -> actief -> idle
+void dmxController() {
+  unsigned long now = millis();
+
+  switch (dmxState) {
+    case DMX_IDLE:
+      // Zorg dat kanaal uit is in idle
+      DMXSerial.write(channel, 0);
+      break;
+
+    case DMX_WAIT:
+      if (now >= waitEndMs) {
+        dmxState = DMX_ACTIVE;
+        showStatus("DMX: ACTIVE");
+      }
+      break;
+
+    case DMX_ACTIVE:
+      // Waarde wordt in dmxWriteFrame gezet
+      if (now >= activeEndMs) {
+        DMXSerial.write(channel, 0);
+        dmxState = DMX_IDLE;
+        showStatus("DMX: IDLE");
+      }
+      break;
+  }
+}
+
+// Start een DMX cyclus: wacht (MM:SS), daarna 'duration' seconden actief
+void startDmxSequence() {
+  // Validatie kanaal (1..512)
+  if (channel < 1 || channel > 512) {
+    showError("Bad DMX channel");
+    return;
+  }
+
+  unsigned long delayMs = (unsigned long)minutes * 60000UL + (unsigned long)seconds * 1000UL;
+  unsigned long durMs   = (unsigned long)seconds_dur * 1000UL;
+
+  unsigned long now = millis();
+  waitEndMs   = now + delayMs;
+  activeEndMs = waitEndMs + durMs;
+
+  if (delayMs == 0) {
+    dmxState = DMX_ACTIVE;
+    showStatus("DMX: ACTIVE");
+  } else {
+    dmxState = DMX_WAIT;
+    showStatus("DMX: WAIT");
+  }
+}
+
+// Optioneel: handmatig stoppen
+void stopDmxSequence() {
+  dmxState = DMX_IDLE;
+  DMXSerial.write(channel, 0);
+  showStatus("DMX: STOP");
+}
+
+
+
 // ===========================================================
 // SETUP
 // ===========================================================
 
 void setup() {
+  Serial.begin(250000);
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
@@ -410,21 +538,120 @@ void setup() {
   lastSelectedIndex = -1;
 
   render(true); // VOLLEDIGE eerste draw
+
+  
+ 
+  // DMX
+  DMXSerial.init(DMXController);   // correct ENUM, niet dmxcontroller()
+  pinMode(DMX_DE, OUTPUT);
+  digitalWrite(DMX_DE, HIGH);      // MAX485 op zenden
+  DMXSerial.write(1, 0);
+
+  showStatus("Ready");
 }
+
 
 // ===========================================================
 // LOOP
 // ===========================================================
 
+// void loop() {
+//   int8_t step = readEncoderStep();
+
+//   // ===== ROTARY =====
+//   if (step != 0) {
+//     if (mode == MODE_SELECT) {
+//       // Navigeren tussen rijen
+//       int8_t old = selectedIndex;
+//       selectedIndex += (step > 0 ? 1 : -1);
+//       if (selectedIndex < 0) selectedIndex = 0;
+//       if (selectedIndex > 2) selectedIndex = 2;
+
+//       if (old != selectedIndex) {
+//         redrawRow(old);
+//         redrawRow(selectedIndex);
+//       }
+//     }
+//     else { // MODE_EDIT: alleen minimale updates
+//       if (selectedIndex == 0) {
+//         updateChannel(step);
+//         redrawChannelValue();
+//       }
+//       else if (selectedIndex == 1) {
+//         if (timerEditField == 0) {
+//           updateMinutes(step);
+//           redrawTimerMinutes();  // alleen MM
+//         } else {
+          
+//           bool mmChanged = updateSeconds(step);
+
+//           // Seconden zijn ALTIJD veranderd
+//           redrawTimerSeconds();
+
+//           // Minuten alleen hertekenen als ze effectief aangepast zijn
+//           if (mmChanged) {
+//             redrawTimerMinutes();
+//           }
+
+//         }
+//       }
+//       else if (selectedIndex == 2) {
+//         updateDuration(step);
+//         redrawDurationValue();
+//       }
+//     }
+//   }
+
+//   // ===== BUTTON =====
+//   if (buttonClicked()) {
+//     if (mode == MODE_SELECT) {
+//       // Start bewerken
+//       mode = MODE_EDIT;
+//       timerEditField = 0;
+//       if (selectedIndex == 1) {
+//         // toon kader rond MM
+//         drawTimerEditBox();
+//       } else {
+//         // voor Channel/Duration volstaat hertekenen van rij voor kader
+//         redrawRow(selectedIndex);
+//       }
+//     }
+//     else {
+//       // In edit: gedrag per rij
+//       if (selectedIndex == 1) {
+//         // Timer: wissel MM <-> SS, of klaar
+//         if (timerEditField == 0) {
+//           // naar seconden: wissel alleen kader, geen tekst
+//           clearTimerEditBoxes();
+//           timerEditField = 1;
+//           drawTimerEditBox();
+//         } else {
+//           // klaar met timer
+//           mode = MODE_SELECT;
+//           // volledige rij zodat kader verdwijnt en highlight correct blijft
+//           redrawRow(selectedIndex);
+//         }
+//       } else {
+//         // Channel/Duration: klaar
+//         mode = MODE_SELECT;
+//         redrawRow(selectedIndex);
+//       }
+//     }
+//   }
+// }
+
+
 void loop() {
+
+  // --- Encoder draaien ---
   int8_t step = readEncoderStep();
 
-  // ===== ROTARY =====
   if (step != 0) {
     if (mode == MODE_SELECT) {
-      // Navigeren tussen rijen
+      // Navigeren door items
       int8_t old = selectedIndex;
       selectedIndex += (step > 0 ? 1 : -1);
+
       if (selectedIndex < 0) selectedIndex = 0;
       if (selectedIndex > 2) selectedIndex = 2;
 
@@ -433,7 +660,7 @@ void loop() {
         redrawRow(selectedIndex);
       }
     }
-    else { // MODE_EDIT: alleen minimale updates
+    else { // MODE_EDIT
       if (selectedIndex == 0) {
         updateChannel(step);
         redrawChannelValue();
@@ -441,19 +668,11 @@ void loop() {
       else if (selectedIndex == 1) {
         if (timerEditField == 0) {
           updateMinutes(step);
-          redrawTimerMinutes();  // alleen MM
+          redrawTimerMinutes();
         } else {
-          
           bool mmChanged = updateSeconds(step);
-
-          // Seconden zijn ALTIJD veranderd
           redrawTimerSeconds();
-
-          // Minuten alleen hertekenen als ze effectief aangepast zijn
-          if (mmChanged) {
-            redrawTimerMinutes();
-          }
-
+          if (mmChanged) redrawTimerMinutes();
         }
       }
       else if (selectedIndex == 2) {
@@ -463,40 +682,49 @@ void loop() {
     }
   }
 
-  // ===== BUTTON =====
+  // --- Knop gedrukt ---
   if (buttonClicked()) {
+
     if (mode == MODE_SELECT) {
-      // Start bewerken
+      // Start edit mode
       mode = MODE_EDIT;
       timerEditField = 0;
+
       if (selectedIndex == 1) {
-        // toon kader rond MM
         drawTimerEditBox();
       } else {
-        // voor Channel/Duration volstaat hertekenen van rij voor kader
         redrawRow(selectedIndex);
       }
     }
-    else {
-      // In edit: gedrag per rij
+
+    else { // MODE_EDIT → ENTER gedrukt
       if (selectedIndex == 1) {
-        // Timer: wissel MM <-> SS, of klaar
+        // Timer MM → SS
         if (timerEditField == 0) {
-          // naar seconden: wissel alleen kader, geen tekst
           clearTimerEditBoxes();
           timerEditField = 1;
           drawTimerEditBox();
         } else {
-          // klaar met timer
+          // Klaar met timer
           mode = MODE_SELECT;
-          // volledige rij zodat kader verdwijnt en highlight correct blijft
           redrawRow(selectedIndex);
         }
-      } else {
-        // Channel/Duration: klaar
+      }
+      else {
+        // Channel of Duration klaar
         mode = MODE_SELECT;
         redrawRow(selectedIndex);
+
+        // ---------- HIER START JE DMX PROGRAMMA ----------
+        if (selectedIndex == 2) {
+          startDmxSequence();
+        }
       }
     }
   }
+
+  // --- DMX non-blocking loops ---
+  dmxWriteFrame();
+  dmxController();
 }
+
