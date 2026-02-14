@@ -3,7 +3,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
 #include <avr/pgmspace.h>
-#include <DMXSerial.h>
+#include <DmxSimple.h>
+#include <SoftwareSerial.h>
 
 // Nu DMX doen:
 // pinnen juist zetten als 10 en 11 zit er een overlap met het oled_scherm dus moet hier een "timetable"/afspraken voor komen
@@ -17,7 +18,7 @@
 
 #define OLED_CS   10
 #define OLED_DC    7
-#define OLED_RST   8
+#define OLED_RST   12
 Adafruit_SSD1351 display(128, 128, &SPI, OLED_CS, OLED_DC, OLED_RST);
 
 #define ENC_A   5
@@ -88,7 +89,7 @@ const int16_t VAL_X    = MARGIN_X + 68;
 // DMX DEFINITIES
 // ===========================================================
 
-#define DMX_TX 1     // Hardware UART TX voor DMX
+#define DMX_PIN 8
 #define DMX_DE 12    // MAX485 Driver Enable
 
 enum DmxState { DMX_IDLE, DMX_WAIT, DMX_ACTIVE };
@@ -451,11 +452,10 @@ void dmxWriteFrame() {
   if (now - lastDMX >= (1000UL / DMX_RATE)) {
     lastDMX = now;
 
-    // Alleen tijdens ACTIVE kanaal op 255, anders 0
     if (dmxState == DMX_ACTIVE) {
-      DMXSerial.write(channel, 255);
+      DmxSimple.write(channel, 255); // stuur volle waarde
     } else {
-      DMXSerial.write(channel, 0);
+      DmxSimple.write(channel, 0);   // anders uit
     }
   }
 }
@@ -467,7 +467,7 @@ void dmxController() {
   switch (dmxState) {
     case DMX_IDLE:
       // Zorg dat kanaal uit is in idle
-      DMXSerial.write(channel, 0);
+      DmxSimple.write(channel, 0);
       break;
 
     case DMX_WAIT:
@@ -480,7 +480,7 @@ void dmxController() {
     case DMX_ACTIVE:
       // Waarde wordt in dmxWriteFrame gezet
       if (now >= activeEndMs) {
-        DMXSerial.write(channel, 0);
+        DmxSimple.write(channel, 0);
         dmxState = DMX_IDLE;
         showStatus("DMX: IDLE");
       }
@@ -515,7 +515,7 @@ void startDmxSequence() {
 // Optioneel: handmatig stoppen
 void stopDmxSequence() {
   dmxState = DMX_IDLE;
-  DMXSerial.write(channel, 0);
+  DmxSimple.write(channel, 0);
   showStatus("DMX: STOP");
 }
 
@@ -543,12 +543,8 @@ void setup() {
   // DMX Upload‑Safe Mode -> want use serial pins
   // ===========================
 
-  pinMode(DMX_DE, OUTPUT);
-  digitalWrite(DMX_DE, LOW);      // driver disabled (RE/DE = LOW)
-  delay(200); // kleine veiligheidspauze
-  DMXSerial.init(DMXController);
-  digitalWrite(DMX_DE, HIGH);     // driver enabled (DMX OUT actief)
-  DMXSerial.write(1, 0);
+  DmxSimple.usePin(DMX_PIN);  // hier stel je de DMX-uitgang in
+  DmxSimple.maxChannel(512);  // maximaal aantal DMX-kanalen
 }
 
 
@@ -729,4 +725,6 @@ void loop() {
   dmxWriteFrame();
   dmxController();
 }
+
+
 
