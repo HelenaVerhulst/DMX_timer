@@ -79,8 +79,7 @@ Bij Timer:
 - Daarna seconden  
 - Dan terug naar SELECT  
 
-Wanneer *Volume* wordt bevestigd: (einde instelling = start) 
-→ `startDmxSequence()` wordt gestart  
+Wanneer *start* de DMX word dan gestart
 
 ---
 
@@ -111,7 +110,8 @@ DMX frames worden ongeveer 30x per seconde verstuurd.
 - Geen overflow bij max 59:59 interval  
 - OLED redraw enkel bij wijzigingen  
 - Volledig non-blocking  
-- Timer kan aangepast worden zonder blokkering  
+- Timer kan aangepast worden zonder blokkering 
+- na 60s gaat het scherm uit tot er weer activiteit aanwezig is (van de encoder) 
 
 ---
 
