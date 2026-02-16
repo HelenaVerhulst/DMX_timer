@@ -1,37 +1,144 @@
+# DMX Interval Controller
 
-This directory is intended for project header files.
+Een non-blocking DMX interval controller met OLED menu en rotary encoder.  
+Gebouwd op een Arduino en een MAX485 (RS485) driver.
 
-A header file is a file containing C declarations and macro definitions
-to be shared between several project source files. You request the use of a
-header file in your project source file (C, C++, etc) located in `src` folder
-by including it, with the C preprocessing directive `#include'.
+---
 
-```src/main.c
+## Hardware
 
-#include "header.h"
+### Microcontroller
+- Arduino UNO / Nano
 
-int main (void)
-{
- ...
-}
+### Display
+- OLED SSD1351 (SPI, 128x128)
+- CS   → Pin 10
+- DC   → Pin 9
+- RST  → Pin 7
+- MOSI → Pin 11 (Hardware SPI)
+- SCK  → Pin 13 (Hardware SPI)
+- VCC  → 5V
+- GND  → GND
+
+
+### Rotary Encoder
+- A → Pin 5  
+- B → Pin 4  
+- SW → Pin 2  
+- GND → GND  
+
+### DMX (RS485 via MAX485)
+- DI → Pin 8 (DMX data)
+- DE → 5V (Transmit enable)
+- RE → GND (Receiver uitgeschakeld)
+- RO → Niet gebruikt
+- VCC → 5V
+- GND → GND
+
+---
+
+## Functionaliteit
+
+Het systeem stuurt **één DMX kanaal** aan in een herhalende cyclus:
+
+```
+WAIT → ACTIVE → WAIT → ACTIVE → ...
 ```
 
-Including a header file produces the same results as copying the header file
-into each source file that needs it. Such copying would be time-consuming
-and error-prone. With a header file, the related declarations appear
-in only one place. If they need to be changed, they can be changed in one
-place, and programs that include the header file will automatically use the
-new version when next recompiled. The header file eliminates the labor of
-finding and changing all the copies as well as the risk that a failure to
-find one copy will result in inconsistencies within a program.
+### Menu Items
 
-In C, the convention is to give header files names that end with `.h'.
+1. **Channel**
+   - Instelbaar van 1–512  
+   - Wrap-around actief
 
-Read more about using header files in official GCC documentation:
+2. **Interval (MM:SS)**
+   - Wachttijd vóór activatie  
+   - Minuten + seconden apart instelbaar  
 
-* Include Syntax
-* Include Operation
-* Once-Only Headers
-* Computed Includes
+3. **Duration**
+   - Actieve tijd in seconden  
 
-https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html
+4. **Volume**
+   - DMX waarde (1–255)  
+   - Stapgrootte = 5  
+
+---
+
+## Bediening
+
+### Encoder draaien
+- **SELECT mode** → navigeren tussen items  
+- **EDIT mode** → waarde aanpassen  
+
+### Encoder indrukken
+- SELECT → EDIT  
+- EDIT → bevestigen  
+
+Bij Timer:
+- Eerst minuten bewerken  
+- Daarna seconden  
+- Dan terug naar SELECT  
+
+Wanneer *Volume* wordt bevestigd: (einde instelling = start) 
+→ `startDmxSequence()` wordt gestart  
+
+---
+
+## DMX Werking
+
+De timing is volledig **non-blocking** en gebruikt `millis()`.
+
+### States
+
+- `DMX_IDLE`
+- `DMX_WAIT`
+- `DMX_ACTIVE`
+
+### Gedrag
+
+| State      | DMX Output |
+|------------|------------|
+| WAIT       | 0          |
+| ACTIVE     | Volume     |
+
+DMX frames worden ongeveer 30x per seconde verstuurd.
+
+---
+
+## Belangrijke Eigenschappen
+
+- Geen `delay()` in timing-logica  
+- Geen overflow bij max 59:59 interval  
+- OLED redraw enkel bij wijzigingen  
+- Volledig non-blocking  
+- Timer kan aangepast worden zonder blokkering  
+
+---
+
+## Voorbeeld Cyclus
+
+Instellingen:
+- Interval: 20 seconden  
+- Duration: 10 seconden  
+- Volume: 200  
+
+Resultaat:
+
+```
+20s UIT
+10s AAN (waarde 200)
+20s UIT
+10s AAN
+...
+```
+
+Herhaalt oneindig.
+
+---
+
+## Bestanden
+
+- `main.ino` → Hoofdprogramma  
+- `dmxController()` → State machine  
+- `startDmxSequence()` → Start nieuwe cyclus  
+- UI functies → OLED rendering
